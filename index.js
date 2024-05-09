@@ -1,6 +1,8 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
+const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const port = process.env.PORT || 5000;
 const app = express();
@@ -13,6 +15,7 @@ app.use(
   })
 );
 app.use(express.json());
+app.use(cookieParser());
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.308otot.mongodb.net`;
 
@@ -24,9 +27,49 @@ const client = new MongoClient(uri, {
   },
 });
 
+// my middleware for verify token
+const verifyToken = (req, res, next) => {
+  const token = req.cookies?.token;
+  // console.log(token);
+  if (!token) return res.status(401).send({ message: "unauthorized access" });
+  if (token) {
+    jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+      if (err) {
+        console.log(err);
+        return res.status(401).send({ massage: "unauthorized access" });
+      }
+      // console.log( decoded);
+      req.user = decoded;
+      next();
+    });
+  }
+};
+
 async function run() {
   try {
     // await client.connect();
+
+    // jwt generate
+    app.post("/jwt", async (req, res) => {
+      const user = req.body;
+      // console.log(user);
+      const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
+        expiresIn: "7d",
+      });
+      res
+        .cookie("token", token, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+        })
+        .send({ success: true });
+    });
+
+    app.post("/logout", async (req, res) => {
+      const user = req.body;
+      // console.log("logging out user", user);
+      res.clearCookie("token", { maxAge: 0 }).send({ success: true });
+    });
 
     const jobsCollections = client.db("marketplace-sesson").collection("jobs");
     const bidsCollections = client.db("marketplace-sesson").collection("bids");
@@ -43,9 +86,13 @@ async function run() {
       res.send(result);
     });
 
-    // get my all jobs
-    app.get("/jobs-email/", async (req, res) => {
-      const email = req.query?.email;
+    // get my all jobs a specific user using query email
+    app.get("/jobs-email", verifyToken, async (req, res) => {
+      const tokenEmail = req?.user?.email;
+      const email = req?.query?.email;
+      if (tokenEmail !== email) {
+        return res.status(403).send({ massage: "forbidden access" });
+      }
       let query = {};
       if (email) {
         query = { "buyer.email": email };
@@ -90,7 +137,7 @@ async function run() {
     });
 
     // get all bids for a user by email from db
-    app.get("/myBids", async (req, res) => {
+    app.get("/myBids", verifyToken, async (req, res) => {
       const email = req.query.email;
       let query = {};
       if (email) {
@@ -101,7 +148,7 @@ async function run() {
     });
 
     // get all bids for jobs owner / buyer
-    app.get("/bidRequest", async (req, res) => {
+    app.get("/bidRequest", verifyToken, async (req, res) => {
       const email = req.query.email;
       let query = {};
       if (email) {
